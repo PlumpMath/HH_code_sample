@@ -1,0 +1,419 @@
+<?php
+
+function custom_501_permission()
+{
+	return array(
+		'manage site description' => array(
+			'title' => t('Manage Site Description'),
+			'description' => t('Allow user to modify the site\'s default page description.'),
+			'restrict access' => true,
+		),
+	);
+}
+
+function custom_501_menu()
+{
+	$items['admin/config/services/site-description'] = array(
+		'title' => t('Update Site Description'),
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('custom_501_site_description_form'),
+		'access arguments' => array('manage site description'),
+		'description' => t('Manage default page description.  Used in hidden tag to improve Search Engine Optimization.  If a page does not have a description assigned, this is what is used.'),
+		'type' => MENU_NORMAL_ITEM,
+		'file' => 'custom_501.details.inc',
+	);
+	$items['admin/commerce/store-status'] = array(
+		'title' => t('Change Store Status'),
+		'page callback' => 'drupal_get_form',
+		'page arguments' => array('custom_501_store_status'),
+		'access arguments' => array('manage site description'),
+		'description' => t('Change store status to open or closed.'),
+		'type' => MENU_NORMAL_ITEM,
+	);
+	$items['ajax/totals'] = array(
+	  'title' => 'Ajax Totals of Sales',
+	  'page callback' => 'custom_501_halo_totals_ajax',
+	  'access callback' => TRUE,
+		'type' => MENU_CALLBACK,
+	);
+
+	
+	
+	return $items;
+}
+
+
+function custom_501_form_alter(&$form, &$form_state, $form_id) {
+		if($form['#theme'][0] == 'views_exposed_form__buy_a_halo__page'){
+				drupal_add_js('/sites/all/modules/custom_501/custom_501.js');
+        $form['field_initiation_date_value']['#type'] = 'select';
+        
+				$form['field_initiation_date_value']['#attributes'] = array('data-placeholder' => 'Initiated');
+				$form['field_initiated_chapter_term__tid']['#attributes'] = array('data-placeholder' => 'Chapter');
+				unset($form['field_initiated_chapter_term__tid']['#options']['All']);
+				$arr = array_reverse($form['field_initiated_chapter_term__tid']['#options'], true); 
+				$arr['All'] = ''; 
+				$form['field_initiated_chapter_term__tid']['#options'] = array_reverse($arr, true);
+				unset($form['field_initiated_chapter_term__tid']['#default_value']);
+				$form['field_initiated_chapter_term__tid']['#required'] = false;
+				$years = array(''=>'','All' => '- Any -');
+				for ($i = 1930; $i < 2020; $i++) {
+					$years[$i] = $i;
+				}
+        $form['field_initiation_date_value']['#options'] = $years;
+        $form['field_initiation_date_value']['#validated'] = 'TRUE';
+        unset($form['field_initiation_date_value']['#size']);
+		}
+		
+		
+		
+		if ($form_id == 'simpletest_entityform_entityform_edit_form') {
+			drupal_add_js('/sites/all/modules/custom_501/entity_forms.js');
+		}
+		
+}
+
+/**
+ * Implements hook_commerce_...
+ */
+function custom_501_commerce_customer_profile_type_info() {
+  $profile_types = array();
+
+  $profile_types['sister'] = array(
+    'type' => 'sister', 
+    'name' => t('Sister information'), 
+    'description' => t('The profile used to collect information about sisters.'),
+  );
+
+  return $profile_types;
+}
+
+
+/**
+ * Implements hook_commerce_...
+ */
+function custom_501_commerce_checkout_pane_info_alter(&$checkout_panes) {
+	$checkout_panes['customer_profile_sister']['locked'] = FALSE;
+	$checkout_panes['checkout_completion_message']['file'] = '';
+	$checkout_panes['checkout_completion_message']['base'] = 'custom_501_checkout_completion_message';
+}
+
+function custom_501_commerce_checkout_page_info_alter(&$checkout_pages) {
+	$checkout_pages['review']['submit_value'] = 'Complete Purchase';
+}
+
+
+/**
+ * Implements hook_commerce_...
+ */
+function custom_501_commerce_checkout_page_info() {
+  $checkout_pages = array();
+ 
+  $checkout_pages['custom_notifications_page'] = array(
+    'name' => t('Custom Notifications Page'),
+    'title' => t('Add Custom Notification'),
+    'weight' => 1,
+    'status_cart' => FALSE,
+    'buttons' => TRUE,
+  );;
+ 
+  return $checkout_pages;
+}
+
+/**
+ * Implements hook_commerce_...
+ */
+function custom_501_commerce_checkout_pane_info() {
+  $checkout_panes = array();
+ 
+  $checkout_panes['custom_notifications_pane'] = array(
+    'title' => t('Notifications'),
+    'base' => 'custom_501_notifications_pane',
+    'page' => 'custom_notifications_page',
+    'callbacks' => array(
+      'checkout_form_submit' => 'notifications_pane_checkout_form_submit',
+    ),
+    'fieldset' => FALSE,
+  );
+ 
+  return $checkout_panes;
+}
+
+/**
+ * Custom checkout pane.
+ * 
+ * Function name should consist of <pane key>_checkout_form.
+ */
+function custom_501_notifications_pane_checkout_form($form, &$form_state, $checkout_pane, $order) {
+	$sisters = array();
+	foreach($order->commerce_line_items['und'] as $line_item) {
+		$line_item = commerce_line_item_load($line_item['line_item_id']);
+		$product = commerce_product_load($line_item->commerce_product['und'][0]['product_id']);
+		$sisters[$product->title] = array(
+			'email' => (!empty($product->field_email_address['und'][0]['email'])) ? $product->field_email_address['und'][0]['email'] : false,
+			'name' => $product->title,
+			'deceased' => ($product->field_membership_status['und'][0]['value'] == "XALUM") ? true : false,
+			'number' => (empty($sisters[$product->title]['number'])) ? (int) $line_item->quantity : $sisters[$product->title]['number'] + (int) $line_item->quantity,
+		);
+	}
+	$form = array();
+	$copy_node = node_load(11);
+	
+	$form['value'] = array(
+	  '#markup' => $copy_node->body['und'][0]['value'],
+	  '#prefix' => '<div>',
+	  '#suffix' => '</div>',
+	);
+	
+	foreach($sisters as $sister) {
+		if (!$sister['email'] && !$sister['deceased']) {
+			$form[$sister['name']]['value'] = array(
+			  '#type' => 'textfield',
+			  '#title' => $sister['name'],
+			  '#description' => t('Please enter an email to notify this sister of your purchase'),
+			  '#size' => 40,
+			  '#maxlength' => 255,
+			);
+		}
+		else {
+			$form[$sister['name']]['value'] = array(
+			  '#type' => 'hidden',
+			  '#value' => $sister['email'],
+			);
+		}
+	}
+	$form_state['sister_object'] = $sisters;
+	return $form;
+
+}
+
+/**
+ * Custom checkout pane submit handler.
+ *
+ * Save node data to order.
+ */
+function notifications_pane_checkout_form_submit($form, &$form_state, $checkout_pane, &$order) {
+	foreach ($form_state['values']['custom_notifications_pane'] as $key => $value) {
+		if ($value['value']) {
+			$form_state['sister_object'][$key]['email'] = $value['value'];
+		}
+	}
+  $order->data['sisters'] = $form_state['sister_object'];
+}
+
+
+
+function custom_501_commerce_checkout_router($order, $checkout_page) {
+	if ($checkout_page['page_id'] == 'checkout' && isset($order->data['reviewed_once'])) {
+		unset($order->data['reviewed_once']);		
+		commerce_order_save($order);
+	}
+	if ($checkout_page['page_id'] == 'custom_notifications_page') {
+		if (!empty($order->data['reviewed_once'])) {
+			if ($order->data['reviewed_once'] == TRUE) {
+				unset($order->data['reviewed_once']);		
+				commerce_order_save($order);
+				commerce_order_status_update($order,'checkout_checkout');
+				drupal_goto('checkout/' . $order->order_id);
+			}
+		}
+		$flag = true;
+		// If order contains any sisters that do not have email addresses AND who are not deceased, route them to the next page.
+		$sisters = array();
+		foreach($order->commerce_line_items['und'] as $line_item) {
+			$line_item = commerce_line_item_load($line_item['line_item_id']);
+			$product = commerce_product_load($line_item->commerce_product['und'][0]['product_id']);
+			$sisters[$product->title] = array(
+				'email' => (!empty($product->field_email_address['und'][0]['email'])) ? $product->field_email_address['und'][0]['email'] : false,
+				'name' => $product->title,
+				'deceased' => ($product->field_membership_status['und'][0]['value'] == "XALUM") ? true : false,
+				'number' => (empty($sisters[$product->title]['number'])) ? (int) $line_item->quantity : $sisters[$product->title]['number'] + (int) $line_item->quantity,
+			);
+			if (empty($product->field_email_address['und'][0]['email'])) {
+				// No email address
+				// Check if deceased
+				if ($product->field_membership_status['und'][0]['value'] != 'XALUM') $flag = false;
+			} 
+		}
+		if ($flag) {
+			// No sisters that are living and without email addresses
+			$order->data['reviewed_once'] = TRUE;
+			$order->data['sisters'] = $sisters;
+			commerce_order_save($order);
+			commerce_order_status_update($order,'checkout_review');
+			drupal_goto('checkout/' . $order->order_id . '/review');
+		}
+	}
+}
+
+function custom_501_checkout_completion_message_checkout_form($a, $b, $c, $order) {
+	$profile = commerce_customer_profile_load($order->field_sister_information['und'][0]['profile_id']);
+	$billing = commerce_customer_profile_load($order->commerce_customer_billing['und'][0]['profile_id']);
+	$profile_name = $profile->field_first_name['und'][0]['value'] . ' ' . $profile->field_last_name['und'][0]['value'];
+	$halo_sent = new stdClass;
+	$halo_sent->name = $profile_name;
+	foreach ($order->data['sisters'] as $sister) {
+		$halo_sent->number = ($sister['number'] == 1) ? 'a halo' : $sister['number'] . ' halos';
+		if ($sister['email']) {
+			if (!isset($order->data['emails_sent'])) {
+				drupal_mail('custom_501', 'halo-sent', $sister['email'], language_default(), $halo_sent);
+			}
+		}
+	}
+	$card_type = $order->data['card']['type'];
+	$last_four = $order->data['card']['last_four'];
+	$form = array();
+	$address = $billing->commerce_customer_address['und'][0]['thoroughfare'] . '<BR>' . $billing->commerce_customer_address['und'][0]['locality'] . ', ' . $billing->commerce_customer_address['und'][0]['administrative_area'] . ' ' . $billing->commerce_customer_address['und'][0]['postal_code'];
+	$contact_html = "<ul class='non-formatted-list'><li>" . $profile_name . "</li><li>" . $address . "</li><li>" . $profile->field_phone_number['und'][0]['value'] . "</li><li>" . $order->mail . "</li></ul>"; 
+	$payment_html = "<ul class='non-formatted-list'><li>$" . $order->commerce_order_total['und'][0]['amount']/100 . ".00</li><li>" . 'HaloHeaven' . "</li><li>" . $card_type . "</li><li>" . 'XXX-XXX-XXX-' . $last_four .'' . "</li>" . "<li>Order Number " . $order->order_id . '</li>' . "</ul>"; 
+	$html = "<h3>Thank You</h3><p>Your Halo purchase is complete. Thank you for honoring your sisters and supporting Pi Beta Phi Foundation.</p><p>Please <a href='javascript:if(window.print)window.print()'>print</a> this receipt for your records. A receipt will also be sent to your email address.</p><p><em>Gifts to Pi Beta Phi Foundation are tax-deductible to the fullest extent allowed by law.</em></p><h4>Contact Information</h4>" . $contact_html ."<h4>Payment Information</h4>" . $payment_html . "<h4>Honorees</h4>";
+	$receipt_html = "<h3>Thank You</h3><p>Your Halo purchase is complete. Thank you for honoring your sisters and supporting Pi Beta Phi Foundation.</p><p>Please print this receipt for your records.</p><p><em>Gifts to Pi Beta Phi Foundation are tax-deductible to the fullest extent allowed by law.</em></p><h4>Contact Information</h4>" . $contact_html ."<h4>Payment Information</h4>" . $payment_html . "<h4>Honorees</h4>";
+	$html .= '<ul id="payment-list">';
+	$receipt_html .= '<ul id="payment-list">';
+	
+	// Add Sisters, chapter, quantity, and where we are emailing the shared halo
+	foreach ($order->data['sisters'] as $sister) {
+		if ($sister['email']) {
+		}
+		$html .= "<li>" . $sister['name'] . "</li>";
+		$receipt_html .= "<li>" . $sister['name'] . "</li>";
+	}
+	$html .= "</ul><h4>Total: $" . $order->commerce_order_total['und'][0]['amount']/100 . ".00</h4>";
+	$receipt_html .= "</ul><h4>Total: $" . $order->commerce_order_total['und'][0]['amount']/100 . ".00</h4>";
+	$form['value'] = array(
+	  '#markup' => $html,
+	  '#prefix' => '<div>',
+	  '#suffix' => '</div>',
+	);
+	if (!isset($order->data['emails_sent'])) {
+	drupal_mail('custom_501', 'receipt', $order->mail, language_default(), $receipt_html);
+	drupal_mail('custom_501', 'receipt', 'fndnwebgifts@pibetaphi.org', language_default(), $receipt_html); 
+	}
+	$order->data['emails_sent'] = TRUE;
+	commerce_order_save($order);
+	
+	
+	return $form;
+	
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function custom_501_block_info() {
+  $blocks['custom_501_totals'] = array(
+    'info' => t('Totals')
+  );
+
+  return $blocks;
+}
+
+
+function custom_501_halo_totals_ajax(){
+	$html = '';
+	$donors = array();
+	$donations = 0;
+	$dollars = 0;
+	
+	$query = db_select('commerce_order', 'co');
+	$or = db_or();
+	$or->condition('co.status', 'pending', '=');
+	$or->condition('co.status', 'completed', '=');
+	$query->condition($or)
+				->join('field_data_commerce_order_total', 'fco', 'co.order_id = fco.entity_id', array());
+  $result = $query->fields('co', array('order_id', 'mail'))
+									->fields('fco', array('commerce_order_total_amount'))
+									->execute();
+
+  if ($result) {
+    while ($row = $result->fetchAssoc()) {
+			$donors[$row['mail']] = (!isset($donors[$row['mail']])) ? 0 : $donors[$row['mail']]++;
+			$dollars += $row['commerce_order_total_amount'];
+    }
+		$donations = $dollars / 500;
+		$dollars = '$' . ($dollars / 100);
+  }
+	$html_more = '<div id="donor-totals"><span class="red">' . count($donors) . '</span> donors have sent <span class="red">' . $donations . '</span> halos and raised <span class="red">' . $dollars . '</span></div>';
+  drupal_json_output($html_more);
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function custom_501_block_view($delta = '') {
+  $block = array();
+
+  switch ($delta) {
+    case 'custom_501_totals':
+			$html = '';
+			$donors = array();
+			$donations = 0;
+			$dollars = 0;
+			
+			$query = db_select('commerce_order', 'co');
+			$or = db_or();
+			$or->condition('co.status', 'pending', '=');
+			$or->condition('co.status', 'completed', '=');
+			$query->condition($or)
+						->join('field_data_commerce_order_total', 'fco', 'co.order_id = fco.entity_id', array());
+		  $result = $query->fields('co', array('order_id', 'mail'))
+											->fields('fco', array('commerce_order_total_amount'))
+											->execute();
+
+		  if ($result) {
+		    while ($row = $result->fetchAssoc()) {
+					$donors[$row['mail']] = (!isset($donors[$row['mail']])) ? 0 : $donors[$row['mail']]++;
+					$dollars += $row['commerce_order_total_amount'];
+		    }
+				$donations = $dollars / 500;
+				$dollars = '$' . ($dollars / 100);
+		  }
+			$html_more = '<div id="donor-totals"><span class="red">' . count($donors) . '</span> donors have sent <span class="red">' . $donations . '</span> halos and raised <span class="red">' . $dollars . '</span></div>';
+      $block['content'] = $html_more;
+      break;
+  }
+  return $block;
+}
+
+function custom_501_views_pre_render(&$view) {
+}
+
+function custom_501_mail($key, &$message, $html) {
+    switch($key) {
+      case 'receipt':
+				$html_template = file_get_contents('/home/jpampel/public_html/sites/all/modules/custom_501/custom_501_mail_receipt.html');
+        $message['subject'] = 'Your Halo Heaven Receipt';
+        $message['body'][] = t($html_template, array('!header' => 'Your Receipt', '!body' => $html));
+        break;
+	    case 'halo-sent':
+				$html_template = file_get_contents('/home/jpampel/public_html/sites/all/modules/custom_501/custom_501_mail.html');
+	      $message['subject'] = 'You have received a Halo';
+	      $message['body'][] = t($html_template, array('!header' => $html->name . ' has purchased ' . $html->number . ' in your honor!', '!body' => 'This donation not only honors you, but strengthens Pi Beta Phi Foundation’s ability to ensure the future of our sisterhood. Through gifts like these, the Foundation can provide more support for literacy, scholarships, Emma Harper Turner grants, leadership education, and more. Together, we can make a difference in the lives of our members and their communities.'));
+	      break;
+		
+    }
+}
+
+function custom_501_modify_boosted_page() {
+	drupal_add_js('/sites/all/modules/custom_501/boost_dynamic_maker.js');
+}
+
+function custom_501_store_status() {
+	$form['custom_501_store_status'] = array(
+	  '#type' => 'radios',
+	  '#title' => t('Store Status'),
+	  '#description' => t('If the store is closed, users will be redirected to a store-closed page instead of purchasing or checking out products.'),
+	  '#options' => array('Closed', 'Open'),
+	  '#default_value' => variable_get('custom_501_store_status', 1),
+	);
+	return system_settings_form($form); 
+}
+
+function custom_501_url_inbound_alter(&$path, &$options, $original_path) {
+	if (variable_get('custom_501_store_status',1) == 0) {
+		if ($path == 'purchase-a-halo' || $path == 'cart') {
+				$path = 'node/12';
+				$options['alias'] = $path;
+		}
+	}
+}
